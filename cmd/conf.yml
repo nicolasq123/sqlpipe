@@ -1,0 +1,25 @@
+dbconfs: 
+  "mysql1": "mysql://root:123456@(127.0.0.1)/test1?charset=utf8&sql_mode=TRADITIONAL&parseTime=true",
+  "mysql2": "mysql://root:123456@(127.0.0.1)/test1?charset=utf8&sql_mode=TRADITIONAL&parseTime=true",
+
+myjob: &myjob
+  name: myjob
+  dbname: mysql1
+  query: "select id as class_id, name as class_name FROM class where id >0"
+  #subjobs: []
+  next: *myjob1
+
+myjob1: &myjob1
+  name: myjob1
+  dbname: mysql2
+  query: "select user.id as user_id, user.name as user_name, '{{.class_name}}' as class_name FROM user where class_id ={{.class_id}}"
+  #subjobs: []
+  #next: *
+
+jobs:
+  - *myjob
+
+
+# select user.id as user_id, user.name as user_name, class.name as class_name 
+# 			from user left join class on
+# 			user.class_id = class.id

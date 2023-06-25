@@ -1,9 +1,7 @@
 package sqlpipe
 
 import (
-	"bytes"
-	"database/sql"
-	"fmt"
+	"log"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
@@ -14,74 +12,94 @@ type Job struct {
 	DBName  string
 	Query   string
 	SubJobs []*Job
-	Pre     *Job
-	db      *sqlx.DB
+	Next    *Job
 }
 
-func (j *Job) Run(dims []map[string]interface{}) (cols []string, data []map[string]string, err error) {
+func (j *Job) Run(dims []map[string]string, dbs map[string]*sqlx.DB) (cols []string, data []map[string]string, err error) {
 	query := j.Query
-	placehs := map[string]string{}
+	placeholders := map[string]string{}
 	args := []interface{}{}
 	for _, sub := range j.SubJobs {
-		cols1, data1, err1 := sub.Run(nil)
+		col, onecolrows, placeholder, err1 := sub.runSubJob(dbs)
 		if err1 != nil {
 			return nil, nil, err1
 		}
-		ls := rows2list(cols1[0], data1)
-		args = append(args, ls...)
-		query, err = Tpl(query, placehs)
+		args = append(args, onecolrows...)
+		placeholders[col] = placeholder
 	}
+	query, err = Tpl(query, placeholders)
 
-	if len(dims) == 0 && j.Pre == nil {
-
-	} else if len(dims) == 0 {
-		//log.Fatalf("job: %s, len dims is zero.", j.Name)
-		return nil, nil, fmt.Errorf("job: %s, len dims is zero.", j.Name)
-	}
-
-	if len(dim) != 0 {
-		query, err = Tpl(query, dim)
+	db := dbs[j.DBName]
+	var n int
+	if len(dims) == 0 {
+		cols, data, n, err = execute(db, query, args...)
 		if err != nil {
-			return nil, nil, err
+			return
+		}
+	} else {
+		for i, dim := range dims {
+			querytmp, err := Tpl(query, dim)
+			if err != nil {
+				return nil, nil, err
+			}
+			colstmp, datatmp, ntmp, err := execute(db, querytmp, args...)
+			if err != nil {
+				return nil, nil, err
+			}
+			if i == 0 {
+				cols = colstmp
+			}
+			data = append(data, datatmp...)
+			n += ntmp
 		}
 	}
 
-
+	if j.Next != nil {
+		cols, data, err = j.Next.Run(data, dbs)
+		if err != nil {
+			return
+		}
+	} else {
+		if n != 0 {
+			log.Printf("query: %s, %d rows affected", j.Query, n)
+		} else {
+			log.Printf("query: %s, data is %v", j.Query, data)
+		}
+	}
+	return
 }
 
-func (j *Job) execute(query string, args []interface{}) (cols []string, data []map[string]string, err error) {
-	if strings.HasPrefix(query, "select") {
-		sqlrows, err := j.db.Query(query, args...)
+func (j *Job) runSubJob(dbs map[string]*sqlx.DB) (col string, args []any, placeholder string, err error) {
+	query := j.Query
+	db := dbs[j.DBName]
+	cols := []string{}
+	data := []map[string]string{}
+	cols, data, _, err = execute(db, query)
+	if err != nil {
+		return
+	}
+	col = cols[0]
+	args = rows2list(col, data)
+	placeholder = genPlaceholders(len(args))
+	return
+}
+
+func execute(db *sqlx.DB, query string, args ...any) (cols []string, data []map[string]string, n int, err error) {
+	query2 := strings.TrimSpace(query)
+	query2 = strings.ToLower(query2)
+	if strings.HasPrefix(query2, "select") {
+		sqlrows, err := db.Query(query, args...)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		cols, data, err = Rows(sqlrows)
-		return cols, data, err
+		return cols, data, 0, err
 	}
 
-	
-}
-
-func Rows(sqlrows *sql.Rows) ([]string, []map[string]string, error) {
-	return nil, nil, nil
-}
-
-func rows2list(col string, data []map[string]string) []interface{} {
-	return []interface{}{}
-}
-
-func genPlaceholders(n int) string {
-	buf := new(bytes.Buffer)
-	for i := 0; i < n; i++ {
-		if i != 0 {
-			buf.WriteString(",")
-		}
-
-		buf.WriteString("?")
+	affected, err := db.Exec(query, args...)
+	if err != nil {
+		return nil, nil, 0, err
 	}
-	return buf.String()
-}
-
-func Tpl(q string, dim interface{}) (s string, err error) {
-	return "", nil
+	n64, err := affected.RowsAffected()
+	return nil, nil, int(n64), err
 }
