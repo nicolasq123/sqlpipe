@@ -3,32 +3,26 @@ package sqlpipe
 import (
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/xwb1989/sqlparser"
 )
 
-// type SqlPipe struct {
-// 	*Conf
-// 	DBs map[string]*sql.DB //name-db
-
-// 	tplRead  string // SELECT * FROM table WHERE xx GROUP BY dims
-// 	tplWrite string // INSERT INTO table (a, b, c) VALUES %s
-// 	writer   *bw.SQLWriter
-// }
-
 type Conf struct {
-	DBConfs map[string]string // name-db
-	Jobs    []*Job
+	DBConfs    map[string]string // name-db
+	Jobs       []*Job
+	WriterType string
+	Debug      bool
 }
 
 type SqlPipe struct {
-	conf *Conf
-	dbs  map[string]*sqlx.DB
+	conf   *Conf
+	dbs    map[string]*sqlx.DB
+	writer MyWriter
 }
 
 func (c *Conf) New() (*SqlPipe, error) {
-	Panic(c.Validate())
 	err := c.Validate()
 	if err != nil {
 		return nil, err
@@ -42,8 +36,9 @@ func (c *Conf) New() (*SqlPipe, error) {
 		dbs[name] = db
 	}
 	return &SqlPipe{
-		conf: c,
-		dbs:  dbs,
+		conf:   c,
+		dbs:    dbs,
+		writer: NewMyWriter(c.WriterType),
 	}, nil
 }
 
@@ -55,7 +50,8 @@ func (c *Conf) Validate() error {
 		return errors.New("empty Jobs")
 	}
 	for _, job := range c.Jobs {
-		err := c.walk(job, c.checkDbName, c.checkDbName, c.checkQuery)
+		// c.checkQuery todo
+		err := c.walk(job, c.checkDbName, c.checkDbName)
 		if err != nil {
 			return err
 		}
@@ -102,14 +98,32 @@ func (c *Conf) checkQuery(j *Job) error {
 }
 
 func (s *SqlPipe) Run() error {
+	defer s.Close()
 	jobs := s.conf.Jobs
 	for _, job := range jobs {
-		_, _, err := s.runOneJob(job)
+		cols, res, err := s.runOneJob(job)
+		if err != nil {
+			return err
+		}
+		if job.isLastJobSelect() {
+			err = s.writer.WriteRecords(cols, res)
+		} else {
+			tmp := map[string]string{}
+			tmp["affected"] = strconv.Itoa(job.getAffected())
+			err = s.writer.WriteRecords([]string{"affected"}, []map[string]string{tmp})
+		}
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *SqlPipe) Close() {
+	s.writer.Close()
+	for _, db := range s.dbs {
+		db.Close()
+	}
 }
 
 func (s *SqlPipe) runOneJob(job *Job) (cols []string, res []map[string]string, err error) {

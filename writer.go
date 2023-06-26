@@ -3,11 +3,12 @@ package sqlpipe
 import (
 	"encoding/csv"
 	"errors"
+	"fmt"
 	"os"
 )
 
 type MyWriter interface {
-	WriteRecords(cols []string, records []map[string]interface{}) (err error)
+	WriteRecords(cols []string, records []map[string]string) (err error)
 	Close()
 }
 
@@ -38,10 +39,66 @@ func (w *csvwriter) Close() {
 	w.f.Close()
 }
 
-func (w *csvwriter) WriteRecords(cols []string, records [][]string) (err error) {
+func (w *csvwriter) WriteRecords(cols []string, records []map[string]string) (err error) {
 	w.w.Write(cols)
-	for i := range records {
-		w.w.Write(records[i])
+	for _, m := range records {
+		rows := make([]string, 0, len(cols))
+		for _, col := range cols {
+			rows = append(rows, m[col])
+		}
+		w.w.Write(rows)
 	}
 	return nil
+}
+
+type stdwriter struct {
+}
+
+func NewStdWriter() *stdwriter {
+	return &stdwriter{}
+}
+
+func (w *stdwriter) Close() {
+}
+
+func (w *stdwriter) WriteRecords(cols []string, records []map[string]string) (err error) {
+	fmt.Println("cols is: ", cols)
+	fmt.Println("records is: ", records)
+	return nil
+}
+
+type allwriter struct {
+	c *csvwriter
+	s *stdwriter
+}
+
+func NewAllWriter() *allwriter {
+	return &allwriter{
+		c: NewCsvWriter(""),
+		s: NewStdWriter(),
+	}
+}
+
+func (w *allwriter) Close() {
+	w.c.Close()
+	w.s.Close()
+}
+
+func (w *allwriter) WriteRecords(cols []string, records []map[string]string) (err error) {
+	err = w.c.WriteRecords(cols, records)
+	if err != nil {
+		return nil
+	}
+	err = w.s.WriteRecords(cols, records)
+	return err
+}
+
+func NewMyWriter(typ string) MyWriter {
+	if typ == "csv" {
+		return NewCsvWriter("")
+	}
+	if typ == "std" {
+		return NewCsvWriter("")
+	}
+	return NewAllWriter()
 }

@@ -1,11 +1,15 @@
 package sqlpipe
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"strings"
 
 	"github.com/jmoiron/sqlx"
 )
+
+var ErrDimEmpty = errors.New("dim empty error")
 
 type Job struct {
 	Name    string
@@ -13,9 +17,16 @@ type Job struct {
 	Query   string
 	SubJobs []*Job
 	Next    *Job
+
+	affected int
 }
 
 func (j *Job) Run(dims []map[string]string, dbs map[string]*sqlx.DB) (cols []string, data []map[string]string, err error) {
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("job name: %s, %v", j.Name, err)
+		}
+	}()
 	query := j.Query
 	placeholders := map[string]string{}
 	args := []interface{}{}
@@ -27,21 +38,28 @@ func (j *Job) Run(dims []map[string]string, dbs map[string]*sqlx.DB) (cols []str
 		args = append(args, onecolrows...)
 		placeholders[col] = placeholder
 	}
-	query, err = Tpl(query, placeholders)
 
 	db := dbs[j.DBName]
 	var n int
 	if len(dims) == 0 {
+		query, err = Tpl(query, placeholders)
+		log.Println("query is: ", query, args)
 		cols, data, n, err = execute(db, query, args...)
 		if err != nil {
 			return
 		}
 	} else {
 		for i, dim := range dims {
-			querytmp, err := Tpl(query, dim)
+			newDim, err := MergeMapWithNoDupKey(dim, placeholders)
 			if err != nil {
 				return nil, nil, err
 			}
+
+			querytmp, err := Tpl(query, newDim)
+			if err != nil {
+				return nil, nil, err
+			}
+			log.Println("query is: ", querytmp, args, dim)
 			colstmp, datatmp, ntmp, err := execute(db, querytmp, args...)
 			if err != nil {
 				return nil, nil, err
@@ -54,34 +72,58 @@ func (j *Job) Run(dims []map[string]string, dbs map[string]*sqlx.DB) (cols []str
 		}
 	}
 
-	if j.Next != nil {
+	if !j.isLastJob() {
+		if len(data) == 0 {
+			err = ErrDimEmpty
+			return
+		}
+
 		cols, data, err = j.Next.Run(data, dbs)
 		if err != nil {
 			return
 		}
-	} else {
-		if n != 0 {
-			log.Printf("query: %s, %d rows affected", j.Query, n)
-		} else {
-			log.Printf("query: %s, data is %v", j.Query, data)
-		}
 	}
+
+	j.affected = n
 	return
 }
 
 func (j *Job) runSubJob(dbs map[string]*sqlx.DB) (col string, args []any, placeholder string, err error) {
 	query := j.Query
 	db := dbs[j.DBName]
-	cols := []string{}
-	data := []map[string]string{}
+	var cols []string
+	var data []map[string]string
 	cols, data, _, err = execute(db, query)
 	if err != nil {
+		err = fmt.Errorf("job name: %s, %v", j.Name, err)
 		return
 	}
 	col = cols[0]
-	args = rows2list(col, data)
+	args = getOneColFromRows(col, data)
 	placeholder = genPlaceholders(len(args))
 	return
+}
+
+func (j *Job) isLastJob() bool {
+	return j.Next == nil
+}
+
+func (j *Job) isLastJobSelect() bool {
+	last := j.lastJob()
+	query := strings.TrimSpace(last.Query)
+	query = strings.ToLower(query)
+	return strings.HasPrefix(query, "select")
+}
+
+func (j *Job) getAffected() int {
+	return j.lastJob().affected
+}
+
+func (j *Job) lastJob() *Job {
+	if j.isLastJob() {
+		return j
+	}
+	return j.Next.lastJob()
 }
 
 func execute(db *sqlx.DB, query string, args ...any) (cols []string, data []map[string]string, n int, err error) {
