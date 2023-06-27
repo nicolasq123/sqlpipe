@@ -43,7 +43,7 @@ func (j *Job) Run(dims []map[string]string, dbs map[string]*sqlx.DB) (cols []str
 	var n int
 	if len(dims) == 0 {
 		query, err = Tpl(query, placeholders)
-		log.Println("query is: ", query, args)
+		log.Println("first query is: ", query, args)
 		cols, data, n, err = execute(db, query, args...)
 		if err != nil {
 			return
@@ -93,6 +93,7 @@ func (j *Job) runSubJob(dbs map[string]*sqlx.DB) (col string, args []any, placeh
 	db := dbs[j.DBName]
 	var cols []string
 	var data []map[string]string
+	log.Println("sub job query is: ", query)
 	cols, data, _, err = execute(db, query)
 	if err != nil {
 		err = fmt.Errorf("job name: %s, %v", j.Name, err)

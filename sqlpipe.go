@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/xwb1989/sqlparser"
 )
+
+var ErrJobNonSelect = errors.New("only last job can be insert/update/delete")
 
 type Conf struct {
 	DBConfs    map[string]string // name-db
@@ -50,8 +53,8 @@ func (c *Conf) Validate() error {
 		return errors.New("empty Jobs")
 	}
 	for _, job := range c.Jobs {
-		// c.checkQuery todo
-		err := c.walk(job, c.checkDbName, c.checkDbName)
+		// c.checkQueryValid todo
+		err := c.walk(job, c.checkDbName, c.checkQuery)
 		if err != nil {
 			return err
 		}
@@ -93,6 +96,23 @@ func (c *Conf) checkDbName(j *Job) error {
 }
 
 func (c *Conf) checkQuery(j *Job) error {
+	job := j
+	for {
+		if job.isLastJob() {
+			break
+		}
+		query := strings.TrimSpace(job.Query)
+		query = strings.ToLower(query)
+		if !strings.HasPrefix(query, "select") {
+			return ErrJobNonSelect
+		}
+		job = job.Next
+	}
+
+	return nil
+}
+
+func (c *Conf) checkQueryValid(j *Job) error {
 	_, err := sqlparser.Parse(j.Query)
 	return err
 }

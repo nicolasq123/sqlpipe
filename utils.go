@@ -31,7 +31,6 @@ func Panic(err error) {
 	}
 }
 
-// func (db *DB) Select(dest interface{}, query string, args ...interface{}) error {
 func Open(dsn string) (*sqlx.DB, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
@@ -172,13 +171,6 @@ func getOneColFromRows(col string, rows []map[string]string) []interface{} {
 	return rs
 }
 
-// func rows2List(col string, rows []map[string]string) []interface{} {
-// 	ls := []interface{}{}
-// 	for _, r := range rows {
-// 		ls = append(ls, r[col])
-// 	}
-// 	return ls
-// }
 
 func genPlaceholders(n int) string {
 	buf := new(bytes.Buffer)
